@@ -15,8 +15,8 @@
 
 cda_rail::simulator::RemainingTimeHeuristicResult
 cda_rail::simulator::simple_remaining_time_heuristic(
-    size_t tr, const cda_rail::simulator::GreedySimulator& simulator,
-    double tr_exit_time, bool consider_earliest_exit) {
+    size_t tr, const GeneralSimulator& simulator, double tr_exit_time,
+    bool consider_earliest_exit) {
   double const relevant_tr_time    = std::max(tr_exit_time, 0.0);
   double       heuristic_exit_time = relevant_tr_time;
   double       average_stop_delay  = 0.0;
@@ -133,22 +133,23 @@ cda_rail::simulator::simple_remaining_time_heuristic(
 
 cda_rail::simulator::HeuristicResult cda_rail::simulator::greedy_heuristic(
     RemainingTimeHeuristicType remaining_time_heuristic_type, size_t tr,
-    const GreedySimulator& simulator, double tr_exit_time,
-    bool consider_earliest_exit) {
+    const GeneralSimulator&                                  simulator,
+    const instances::GeneralPerformanceOptimizationInstance& instance,
+    double tr_exit_time, bool consider_earliest_exit) {
   const auto [feasible, remaining_exit_time, average_remaining_stop_delay] =
       remaining_time_heuristic(remaining_time_heuristic_type, tr, simulator,
                                tr_exit_time, consider_earliest_exit);
   return {.feasible = feasible,
           .objective_value_difference =
-              remaining_exit_time +
-              (simulator.get_instance()->get_station_delay_weight() *
-               average_remaining_stop_delay)};
+              remaining_exit_time + (instance.get_station_delay_weight() *
+                                     average_remaining_stop_delay)};
 }
 
 cda_rail::simulator::HeuristicResult cda_rail::simulator::full_greedy_heuristic(
     RemainingTimeHeuristicType remaining_time_heuristic_type,
-    const GreedySimulator& simulator, const SimulatorResults& sim_results,
-    bool consider_earliest_exit) {
+    const GeneralSimulator&    simulator,
+    const instances::GeneralPerformanceOptimizationInstance& instance,
+    const SimulatorResults& sim_results, bool consider_earliest_exit) {
   const auto train_count =
       simulator.get_instance()->get_const_train_list().size();
   if (sim_results.exit_times.size() != train_count) {
@@ -164,11 +165,11 @@ cda_rail::simulator::HeuristicResult cda_rail::simulator::full_greedy_heuristic(
   bool   feas = true;
   double obj  = 0.0;
   for (size_t tr = 0; tr < train_count; ++tr) {
-    const auto [feas_tr, obj_tr] =
-        greedy_heuristic(remaining_time_heuristic_type, tr, simulator,
-                         sim_results.exit_times.at(tr), consider_earliest_exit);
+    const auto [feas_tr, obj_tr] = greedy_heuristic(
+        remaining_time_heuristic_type, tr, simulator, instance,
+        sim_results.exit_times.at(tr), consider_earliest_exit);
     feas = feas && feas_tr;
-    obj += simulator.get_instance()->get_train_weights().at(tr) * obj_tr;
+    obj += instance.get_train_weights().at(tr) * obj_tr;
   }
   return {.feasible = feas, .objective_value_difference = obj};
 }

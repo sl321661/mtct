@@ -155,15 +155,16 @@ private:
 
   // Helper
   [[nodiscard]] static std::unordered_set<GreedySimulatorState>
-  next_states_single_edge(const simulator::GreedySimulator& simulator);
+  next_states_single_edge(const simulator::GeneralSimulator& simulator);
   [[nodiscard]] static std::unordered_set<GreedySimulatorState>
-              next_states_next_ttd(const simulator::GreedySimulator& simulator);
-  static void next_state_ttd_helper(size_t tr, GreedySimulatorState& state,
-                                    const simulator::GreedySimulator& simulator,
-                                    const cda_rail::index_vector& new_edges);
+  next_states_next_ttd(const simulator::GeneralSimulator& simulator);
+  static void
+  next_state_ttd_helper(size_t tr, GreedySimulatorState& state,
+                        const simulator::GeneralSimulator& simulator,
+                        const cda_rail::index_vector&      new_edges);
   static void
   next_state_exit_vertex_helper(size_t tr, GreedySimulatorState& state,
-                                const simulator::GreedySimulator& simulator);
+                                const simulator::GeneralSimulator& simulator);
 
   /**
    * @brief Generates the next reachable states using the specified transition
@@ -177,8 +178,8 @@ private:
    * strategy is unknown.
    */
   [[nodiscard]] static std::unordered_set<GreedySimulatorState>
-  next_states(const simulator::GreedySimulator& simulator,
-              const SolverStrategyMBAStar&      solver_strategy_input) {
+  next_states(const simulator::GeneralSimulator& simulator,
+              const SolverStrategyMBAStar&       solver_strategy_input) {
     if (solver_strategy_input.time_aware_state_transitions) {
       throw cda_rail::exceptions::ConsistencyException(
           "Time aware state transitions are not yet implemented.");

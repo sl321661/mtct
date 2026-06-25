@@ -326,7 +326,7 @@ TEST(GreedyHeuristic, FullGreedyHeuristicRejectsMismatchedResultSizes) {
   bad_exit_times.exit_times.clear();
   EXPECT_THROW((void)cda_rail::simulator::full_greedy_heuristic(
                    cda_rail::simulator::RemainingTimeHeuristicType::Simple,
-                   simulator, bad_exit_times, false),
+                   simulator, *simulator.get_instance(), bad_exit_times, false),
                cda_rail::exceptions::ConsistencyException);
 }
 

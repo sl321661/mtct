@@ -52,13 +52,14 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::solve(
   const auto init_simulator_result = simulator.simulate(
       model_detail_input.dt, model_detail_input.late_entry_possible,
       model_detail_input.limit_speed_by_leaving_edges, false);
-  const auto init_obj =
-      simulator::objective_val(simulator, init_simulator_result.exit_times,
-                               init_simulator_result.stop_times);
+  const auto init_obj = simulator::objective_val(
+      *simulator.get_instance(), init_simulator_result.exit_times,
+      init_simulator_result.stop_times);
   const auto [init_heuristic_feas, init_heuristic_val] =
       simulator::full_greedy_heuristic(
           solver_strategy_input.remaining_time_heuristic_type, simulator,
-          init_simulator_result, solver_strategy_input.consider_earliest_exit);
+          *simulator.get_instance(), init_simulator_result,
+          solver_strategy_input.consider_earliest_exit);
 
   PLOGD << "Initial state: final = "
         << (simulator.is_final_state() ? "yes" : "no")
@@ -166,12 +167,13 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::solve(
         PLOGV << "State is infeasible, skipping.";
         continue;
       }
-      const auto obj = simulator::objective_val(simulator, sim_res.exit_times,
-                                                sim_res.stop_times);
+      const auto obj = simulator::objective_val(
+          *simulator.get_instance(), sim_res.exit_times, sim_res.stop_times);
       const auto [heuristic_feas, heuristic_val] =
           simulator::full_greedy_heuristic(
               solver_strategy_input.remaining_time_heuristic_type, simulator,
-              sim_res, solver_strategy_input.consider_earliest_exit);
+              *simulator.get_instance(), sim_res,
+              solver_strategy_input.consider_earliest_exit);
       const auto new_obj =
           obj + solver_strategy_input.a_star_weight * heuristic_val;
       const auto final = simulator.is_final_state();
@@ -302,8 +304,7 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::solve(
 
 std::unordered_set<cda_rail::solver::astar_based::GreedySimulatorState>
 cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
-    next_states_single_edge(
-        const cda_rail::simulator::GreedySimulator& simulator) {
+    next_states_single_edge(const simulator::GeneralSimulator& simulator) {
   /**
    * This function determines all possible next states. This state could be
    * obtained by:
@@ -380,8 +381,7 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
 
 std::unordered_set<cda_rail::solver::astar_based::GreedySimulatorState>
 cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
-    next_states_next_ttd(
-        const cda_rail::simulator::GreedySimulator& simulator) {
+    next_states_next_ttd(const simulator::GeneralSimulator& simulator) {
   /** This function determines all possible next states. This state could be
    * obtained by:
    * - a new train entering the network
@@ -471,8 +471,8 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
 void cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
     next_state_ttd_helper(
         size_t tr, cda_rail::solver::astar_based::GreedySimulatorState& state,
-        const cda_rail::simulator::GreedySimulator& simulator,
-        const cda_rail::index_vector&               new_edges) {
+        const simulator::GeneralSimulator& simulator,
+        const cda_rail::index_vector&      new_edges) {
   const auto& ttd_sections = simulator.get_ttd_sections();
 
   for (size_t ttd_id = 0; ttd_id < ttd_sections.size(); ++ttd_id) {
@@ -495,7 +495,7 @@ void cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
 void cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::
     next_state_exit_vertex_helper(
         size_t tr, cda_rail::solver::astar_based::GreedySimulatorState& state,
-        const cda_rail::simulator::GreedySimulator& simulator) {
+        const simulator::GeneralSimulator& simulator) {
   const auto& last_edge_id = state.train_edges.at(tr).back();
   const auto& last_edge =
       simulator.get_instance()->get_const_network().get_edge(last_edge_id);
