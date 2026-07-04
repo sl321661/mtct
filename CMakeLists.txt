@@ -47,7 +47,9 @@ endmacro()
 include(cmake/StandardProjectSettings.cmake)
 if(NOT TARGET project_options)
   # Use the options specified in CompilerOptions.cmake
-  add_library(project_options INTERFACE)
+  add_library(project_options INTERFACE
+          test/test_eventsimulator.cpp
+  )
 
   # Standard compiler options
   include(cmake/CompilerOptions.cmake)

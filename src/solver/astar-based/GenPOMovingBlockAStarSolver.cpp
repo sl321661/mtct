@@ -4,6 +4,7 @@
 #include "EOMHelper.hpp"
 #include "plog/Log.h"
 #include "probleminstances/GeneralPerformanceOptimizationInstance.hpp"
+#include "simulator/EventSimulator.hpp"
 #include "simulator/GreedyHeuristic.hpp"
 #include "simulator/GreedySimulator.hpp"
 #include "solver/GeneralSolver.hpp"
@@ -33,7 +34,16 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::solve(
 
   const auto ttd_section =
       get_instance().get_const_network().unbreakable_sections();
-  simulator::GreedySimulator simulator(get_instance(), ttd_section);
+
+  simulator::GreedySimulator greedy_simulator(get_instance(), ttd_section);
+  simulator::EventSimulator  event_simulator(get_instance(), ttd_section);
+
+  // simulator::GreedySimulator& simulator{greedy_simulator};
+  simulator::EventSimulator& simulator{event_simulator};
+
+  // const auto event_simulator_result = event_simulator.simulate(
+  //     model_detail_input.late_entry_possible,
+  //     model_detail_input.limit_speed_by_leaving_edges, false);
 
   std::unordered_set<GreedySimulatorState> explored_states;
   MinPriorityQueue                         pq;

@@ -23,5 +23,6 @@ package_add_test(
   ${CMAKE_CURRENT_SOURCE_DIR}/test_multiarray.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_general_performance_optimization_instances.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_greedysimulator.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test_eventsimulator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_greedyheuristic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_mb_astar.cpp)

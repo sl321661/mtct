@@ -201,6 +201,18 @@ double cda_rail::max_braking_pos_after_dt_linear_movement(double v_0,
   const double travelled_distance = (v_0 + reached_speed) * dt / 2;
   return travelled_distance + braking_distance(reached_speed, d);
 }
+double cda_rail::distance_travelled(double u, double v, double a) {
+  return distance_travelled_input_speed_squared(u * u, v * v, a);
+}
+double cda_rail::final_speed_squared(double u, double a, double s) {
+  return u * u + 2.0 * a * s;
+}
+double cda_rail::distance_travelled_input_speed_squared(double u_squared,
+                                                        double v_squared,
+                                                        double a) {
+  assert(abs(a) > EPS);
+  return (v_squared - u_squared) / (2.0 * a);
+}
 
 // ---------------------------
 // MINIMAL TRAVEL TIMES
@@ -241,6 +253,12 @@ double cda_rail::min_travel_time_to_end(double v_1, double v_2, double v_m,
   // and deceleration swapped
   // NOLINTNEXTLINE(readability-suspicious-call-argument)
   return min_travel_time_from_start(v_2, v_1, v_m, d, a, s, s - x);
+}
+
+double cda_rail::max_speed_squared_two_phase_travel(double u, double v,
+                                                    double a, double d,
+                                                    double s_t) {
+  return (2.0 * s_t * a * d + d * u * u + a * v * v) / (a + d);
 }
 
 // ----------------------------

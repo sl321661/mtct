@@ -72,6 +72,34 @@ double braking_distance(double v, double d);
 double max_braking_pos_after_dt_linear_movement(double v_0, double v_max,
                                                 double a, double d, double dt);
 
+/**
+ *
+ * @param u Initial speed
+ * @param v Final speed
+ * @param a Acceleration if positive, deceleration if negative
+ * @return Distance traveled while accelerating/decelerating from u to v
+ */
+double distance_travelled(double u, double v, double a);
+
+/**
+ *
+ * @param u Initial speed
+ * @param a Initial acceleration
+ * @param s Distance traveled
+ * @return The final speed squared
+ */
+double final_speed_squared(double u, double a, double s);
+
+/**
+ *
+ * @param u_squared Initial speed squared
+ * @param v_squared Final speed squared
+ * @param a Acceleration if positive, deceleration if negative
+ * @return Distance traveled while accelerating/decelerating from u to v
+ */
+double distance_travelled_input_speed_squared(double u_squared,
+                                              double v_squared, double a);
+
 // ---------------------------
 // MINIMAL TRAVEL TIMES
 //
@@ -150,6 +178,21 @@ double min_travel_time_from_start(double v_1, double v_2, double v_m, double a,
  */
 double min_travel_time_to_end(double v_1, double v_2, double v_m, double a,
                               double d, double s, double x);
+
+/**
+ * @brief Assuming travel over s_t distance with initial speed u and final speed
+ * v, under  maximal acceleration followed by maximal deceleration, this
+ * function calculates the maximum speed reached (after the acceleration phase)
+ * squared.
+ * @param u Initial speed in m/s
+ * @param v Final speed in m/s
+ * @param a Acceleration in m/s^2
+ * @param d Deceleration in m/s^2
+ * @param s_t Total distance in m
+ * @return Maximum speed reached, squared
+ */
+double max_speed_squared_two_phase_travel(double u, double v, double a,
+                                          double d, double s_t);
 
 // ----------------------------
 // MAX TRAVEL TIMES
