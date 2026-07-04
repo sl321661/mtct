@@ -173,10 +173,10 @@ private:
    * @return Series of train movements to traverse the free track as fast as
    * possible
    */
-  std::vector<TrainMovement>
+  static std::vector<TrainMovement>
   calculate_optimal_train_movements(const std::vector<EdgeSegment>& free_track,
                                     double       initial_speed,
-                                    const Train& train) const;
+                                    const Train& train);
 
   /**
    * Calculates train movement which traverses a span of tracks as quickly as
