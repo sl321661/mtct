@@ -84,6 +84,24 @@ double distance_travelled(double u, double v, double a);
 /**
  *
  * @param u Initial speed
+ * @param v Final speed
+ * @param s Distance traveled
+ * @return The time taken to travel the given distance with given speeds
+ */
+double time_taken(double u, double v, double s);
+
+/**
+ *
+ * @param u Initial speed
+ * @param a Acceleration/deceleration
+ * @param t Time passed
+ * @return
+ */
+double final_speed_time(double u, double a, double t);
+
+/**
+ *
+ * @param u Initial speed
  * @param a Initial acceleration
  * @param s Distance traveled
  * @return The final speed squared
@@ -99,6 +117,15 @@ double final_speed_squared(double u, double a, double s);
  */
 double distance_travelled_input_speed_squared(double u_squared,
                                               double v_squared, double a);
+
+/**
+ *
+ * @param u Initial speed
+ * @param v Final speed
+ * @param t Time
+ * @return Time traveled in t seconds
+ */
+double distance_travelled_time(double u, double v, double t);
 
 // ---------------------------
 // MINIMAL TRAVEL TIMES

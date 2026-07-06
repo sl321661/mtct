@@ -204,6 +204,14 @@ double cda_rail::max_braking_pos_after_dt_linear_movement(double v_0,
 double cda_rail::distance_travelled(double u, double v, double a) {
   return distance_travelled_input_speed_squared(u * u, v * v, a);
 }
+double cda_rail::time_taken(double u, double v, double s) {
+  assert(abs(u) > EPS);
+  assert(abs(v) > EPS);
+  return (2.0 * s) / (u + v);
+}
+double cda_rail::final_speed_time(double u, double a, double t) {
+  return u + a * t;
+}
 double cda_rail::final_speed_squared(double u, double a, double s) {
   return u * u + 2.0 * a * s;
 }
@@ -212,6 +220,9 @@ double cda_rail::distance_travelled_input_speed_squared(double u_squared,
                                                         double a) {
   assert(abs(a) > EPS);
   return (v_squared - u_squared) / (2.0 * a);
+}
+double cda_rail::distance_travelled_time(double u, double v, double t) {
+  return (u + v) * t / 2;
 }
 
 // ---------------------------

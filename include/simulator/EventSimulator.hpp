@@ -7,6 +7,7 @@
 #include "simulator/GeneralSimulator.hpp"
 
 // NOLINTNEXTLINE(misc-include-cleaner)
+#include "../../extern/cli11/include/CLI/App.hpp"
 #include "EOMHelper.hpp"
 
 #include "gtest/gtest_prod.h"
@@ -28,6 +29,7 @@
 #endif
 #if TEST_FRIENDS
 class EventSimulator_CalculateOptimalTrainMovements_Test;
+class EventSimulator_MoveTrain_Test;
 #endif
 
 namespace cda_rail::simulator {
@@ -90,19 +92,24 @@ public:
 private:
 #if TEST_FRIENDS
   FRIEND_TEST(::EventSimulator, CalculateOptimalTrainMovements);
+  FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
   /**
-   * Describes linear train movement with initial velocity u, final velocity v,
-   * acceleration a, distance traveled s.
+   * Describes linear train movement with initial speed u, final speed v,
+   * acceleration a, distance traveled s over time t.
    */
   struct TrainMovement {
-    TrainMovement(double u, double v, double a, double s) {
+    TrainMovement(double u, double v, double a, double s, double t) {
       this->u = u;
       this->v = v;
       this->a = a;
       this->s = s;
+      this->t = t;
     }
+
+    TrainMovement(double u, double v, double a, double s)
+        : TrainMovement(u, v, a, s, time_taken(u, v, s)) {}
 
     TrainMovement(double u, double v, double a)
         : TrainMovement(u, v, a, distance_travelled(u, v, a)) {}
@@ -111,7 +118,15 @@ private:
     double v;
     double a;
     double s;
+    double t;
   };
+
+  /**
+   * Describes the stop at the end of some free track. The end can either be
+   * guaranteed (station), temporary (moving train, vertex order restriction) or
+   * the end of the train's line.
+   */
+  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd, LineEnd };
 
   /**
    * Describes (part of) an edge, storing only length and max_speed
@@ -152,18 +167,18 @@ private:
    * Get the position in the current_train's path where the train no longer has
    * a free path, either due to another train on a shared edge or a train which
    * is yet to cross a vertex first.
-   * @param current_train ID of current train to find the free track end for
    * @param train_positions Train positions
    * @param trains_in_network Trains in network, only these will be considered
    * for collisions on edges
    * @param trains_on_edges
+   * @param current_train ID of current train to find the free track end for
    */
-  void find_free_track_end(
-      size_t current_train,
-      const std::vector<::cda_rail::simulator::EventSimulator::TrainPosition>&
-                                                     train_positions,
+  [[nodiscard]] std::pair<std::vector<EdgeSegment>, FreeTrackStopType>
+  find_free_track_ahead(
+      const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
-      const std::vector<std::unordered_set<size_t>>& trains_on_edges) const;
+      const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+      size_t                                         current_train) const;
 
   /**
    *
@@ -173,10 +188,9 @@ private:
    * @return Series of train movements to traverse the free track as fast as
    * possible
    */
-  static std::vector<TrainMovement>
+  [[nodiscard]] static std::vector<TrainMovement>
   calculate_optimal_train_movements(const std::vector<EdgeSegment>& free_track,
-                                    double       initial_speed,
-                                    const Train& train);
+                                    double initial_speed, const Train& train);
 
   /**
    * Calculates train movement which traverses a span of tracks as quickly as
@@ -193,6 +207,28 @@ private:
                                        std::span<const EdgeSegment> free_track,
                                        double       initial_speed,
                                        const Train& train);
+
+  /**
+   *
+   * @param movements Train movements to sum time for
+   * @return The total time needed to complete all the train movements
+   */
+  static double
+  get_movement_total_time(const std::span<const TrainMovement>& movements);
+
+  static void move_train(TrainPosition& train_position, double& train_velocity,
+                         std::vector<TrainMovement>& train_movements, double t);
+
+  /**
+   * Calculates the distance traveled in a certain time and changes the
+   * train_movement to represent the remaining movement after the time only.
+   * @param movement Train movement to partially apply, will be updated
+   * in-place to only hold the 'non-consumed' part.
+   * @param t The time to apply to the movement
+   * @return Distance traveled in time t.
+   */
+  static double distance_traveled_consume_movement(TrainMovement& movement,
+                                                   double         t);
 
   static double squared(double x);
 };
