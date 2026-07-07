@@ -123,10 +123,10 @@ private:
 
   /**
    * Describes the stop at the end of some free track. The end can either be
-   * guaranteed (station), temporary (moving train, vertex order restriction) or
-   * the end of the train's line.
+   * guaranteed (station, end of line) or temporary (moving train, vertex
+   * order/TTD restriction)
    */
-  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd, LineEnd };
+  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd };
 
   /**
    * Describes (part of) an edge, storing only length and max_speed
@@ -229,6 +229,14 @@ private:
    */
   static double distance_traveled_consume_movement(TrainMovement& movement,
                                                    double         t);
+
+  /**
+   * Checks whether a train's exit vertex (from the schedule) is on the train's
+   * current path.
+   * @param train_id Train ID
+   * @return true if the exit vertex appears at the end of the train's path.
+   */
+  bool path_includes_exit_vertex(const size_t train_id) const;
 
   static double squared(double x);
 };
