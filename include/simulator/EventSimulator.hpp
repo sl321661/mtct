@@ -123,10 +123,10 @@ private:
 
   /**
    * Describes the stop at the end of some free track. The end can either be
-   * guaranteed (station, end of line) or temporary (moving train, vertex
-   * order/TTD restriction)
+   * guaranteed (station), temporary (moving train, vertex order/TTD
+   * restriction) or the end of the train's line
    */
-  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd };
+  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd, LineEnd };
 
   /**
    * Describes (part of) an edge, storing only length and max_speed
@@ -162,6 +162,30 @@ private:
 
   using train_timestep_queue =
       std::priority_queue<TrainTimestep, std::vector<TrainTimestep>, Compare>;
+
+  /**
+   *
+   * @param trains_in_network Trains already in the network
+   * @param train_position Train positions
+   * @param time
+   * @param train_id The ID of the train to check
+   * @return Whether the train can be entered into the network
+   */
+  bool should_enter_train(const std::unordered_set<size_t>& trains_in_network,
+                          const TrainPosition& train_position, double time,
+                          size_t train_id) const;
+
+  /**
+   * Enter a train into the network, assumes it is not already present
+   * @param trains_in_network Reference to the trains currently in the network
+   * @param train_positions Reference to the positions of the trains
+   * @param train_velocities Reference to the velocities of the trains
+   * @param train_id The ID of the train to enter
+   */
+  void enter_train(std::unordered_set<size_t>& trains_in_network,
+                   std::vector<TrainPosition>& train_positions,
+                   std::vector<double>&        train_velocities,
+                   size_t                      train_id) const;
 
   /**
    * Get the position in the current_train's path where the train no longer has
@@ -209,6 +233,21 @@ private:
                                        const Train& train);
 
   /**
+   * Add a TrainMovement to the vector only if the distance covered or time
+   * passed by the movement is not zero
+   * @remark The movement may be zero if an algorithm assumes that a train must
+   * accelerate to a certain velocity as part of optimal movement, but the train
+   * is already traveling at that velocity. While a movement with distance and
+   * time of zero should not break anything else, it is nicer for debugging
+   * purposes to never add these movements to begin with.
+   * @param movements Reference to vector of TrainMovements
+   * @param m Movement to be appended to the back of movements if it does not
+   * represent a distance of zero
+   */
+  static void append_movement_if_not_zero(std::vector<TrainMovement>& movements,
+                                          const TrainMovement&        m);
+
+  /**
    *
    * @param movements Train movements to sum time for
    * @return The total time needed to complete all the train movements
@@ -231,12 +270,36 @@ private:
                                                    double         t);
 
   /**
+   * Get the position of a vertex on the path of the given train
+   * @param train_id Train for which to get the position
+   * @param vertex_id Vertex for which to get the position
+   * @throws ConsistencyException if vertex is not on trian's path
+   * @return Position relative to train's path where the vertex is located
+   */
+  double get_vertex_position(size_t train_id, size_t vertex_id) const;
+
+  /**
    * Checks whether a train's exit vertex (from the schedule) is on the train's
    * current path.
    * @param train_id Train ID
    * @return true if the exit vertex appears at the end of the train's path.
    */
-  bool path_includes_exit_vertex(const size_t train_id) const;
+  bool path_includes_exit_vertex(size_t train_id) const;
+
+  /**
+   * Get a set of all the edges a train has already passed.
+   * @param train_position
+   * @param train_id
+   * @return
+   */
+  index_set get_passed_edges_of_train(const TrainPosition& train_position,
+                                      size_t               train_id) const;
+
+  bool train_has_passed_vertex(const TrainPosition& train_position,
+                               size_t train_id, size_t vertex_id) const;
+
+  bool train_has_passed_ttd(const TrainPosition& train_position,
+                            size_t train_id, size_t ttd_id) const;
 
   static double squared(double x);
 };

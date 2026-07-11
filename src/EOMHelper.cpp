@@ -205,8 +205,7 @@ double cda_rail::distance_travelled(double u, double v, double a) {
   return distance_travelled_input_speed_squared(u * u, v * v, a);
 }
 double cda_rail::time_taken(double u, double v, double s) {
-  assert(abs(u) > EPS);
-  assert(abs(v) > EPS);
+  assert(abs(u) > EPS || abs(v) > EPS);
   return (2.0 * s) / (u + v);
 }
 double cda_rail::final_speed_time(double u, double a, double t) {
