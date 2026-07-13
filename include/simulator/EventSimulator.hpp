@@ -129,6 +129,13 @@ private:
   enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd, LineEnd };
 
   /**
+   * Describes a dependency which may appear at the end of a stretch of free
+   * track, the depended on train may be followable, or may just need to pass a
+   * certain point.
+   */
+  enum class FreeTrackDependencyType { Follow, Pass };
+
+  /**
    * Describes (part of) an edge, storing only length and max_speed
    */
   struct EdgeSegment {
@@ -149,6 +156,16 @@ private:
     double timestep;
   };
 
+  /**
+   * Describes a train dependence. The dependent_tr requires the leading train
+   * to be at least required_distance along it's route to be able to continue.
+   */
+  struct TrainDependence {
+    size_t leading_tr;
+    size_t dependent_tr;
+    double required_location;
+  };
+
   struct MaxSpeedChangePoint {
     double position;
     double new_max_speed;
@@ -163,17 +180,28 @@ private:
   using train_timestep_queue =
       std::priority_queue<TrainTimestep, std::vector<TrainTimestep>, Compare>;
 
+  using train_dependencies = std::vector<std::vector<TrainDependence>>;
+
   /**
-   *
-   * @param trains_in_network Trains already in the network
-   * @param train_position Train positions
-   * @param time
-   * @param train_id The ID of the train to check
-   * @return Whether the train can be entered into the network
+   * Check whether a train can be entered into the network based on vertex and
+   * TTD orders. If it cannot be added due to depending on other trains to pass
+   * a position first, the first dependency found will be returned, else an
+   * empty optional is returned.
+   * @param train_positions All train positions
+   * @param train_id ID of train to enter
+   * @remark This only returns an arbitrary dependency rather than the
+   * first/last/all of them.
+   * @return empty optional if the train can be entered into the network, else a
+   * dependency of the train entering the network.
    */
-  bool should_enter_train(const std::unordered_set<size_t>& trains_in_network,
-                          const TrainPosition& train_position, double time,
-                          size_t train_id) const;
+  [[nodiscard]] std::optional<TrainDependence>
+  can_enter_train_or_get_dependency(
+      const std::vector<TrainPosition>& train_positions, size_t train_id) const;
+
+  [[nodiscard]] static std::optional<double> get_time_when_dependency_cleared(
+      const TrainDependence&            dependency,
+      const std::vector<TrainMovement>& leading_movements,
+      const TrainPosition&              leading_position);
 
   /**
    * Enter a train into the network, assumes it is not already present
@@ -196,8 +224,16 @@ private:
    * for collisions on edges
    * @param trains_on_edges
    * @param current_train ID of current train to find the free track end for
+   * @returns Tuple of vector with free edge segments, the track end type, an
+   * optional pair of dependency, and a free track dependency type. The optional
+   * has a value if the track ends due to waiting for another train to first
+   * traverse a vertex or TTD. The free track dependency type indicates whether
+   * the train which ended the free track can be followed or just needs to pass
+   * a certain point.
    */
-  [[nodiscard]] std::pair<std::vector<EdgeSegment>, FreeTrackStopType>
+  [[nodiscard]] std::tuple<
+      std::vector<EdgeSegment>, FreeTrackStopType,
+      std::optional<std::pair<TrainDependence, FreeTrackDependencyType>>>
   find_free_track_ahead(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
@@ -297,6 +333,18 @@ private:
 
   bool train_has_passed_vertex(const TrainPosition& train_position,
                                size_t train_id, size_t vertex_id) const;
+
+  /**
+   * Get the position relative to a train's path where it is on the given TTD
+   * for the last moment
+   * @param train_position Train position of train
+   * @param train_id Train ID
+   * @param ttd_id TTD ID
+   * @throws InvalidInputException if train never passes through this TTD
+   * @return Position on train's path of the TTD end
+   */
+  double train_ttd_end_position(const TrainPosition& train_position,
+                                size_t train_id, size_t ttd_id) const;
 
   bool train_has_passed_ttd(const TrainPosition& train_position,
                             size_t train_id, size_t ttd_id) const;
