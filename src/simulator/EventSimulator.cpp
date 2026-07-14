@@ -615,6 +615,53 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
   return movements;
 }
 
+double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
+    TrainPosition& tr1_pos, size_t tr1, size_t tr2) const {
+  const auto& tr1_edges = get_train_edges_of_tr(tr1);
+  const auto& tr2_edges = get_train_edges_of_tr(tr2);
+
+  // Find start edge
+  size_t tr1_edge_index     = 0;
+  size_t tr1_edge_id        = 0;
+  auto   distance_into_edge = 0.0;
+  auto   current_pos        = 0.0;
+  for (auto i = 0; i < tr1_edges.size(); ++i) {
+    const auto  edge_id = tr1_edges.at(i);
+    const auto& edge    = get_instance()->get_const_network().get_edge(edge_id);
+    current_pos += edge.length;
+    if (tr1_pos.front < current_pos) {
+      tr1_edge_index     = i;
+      tr1_edge_id        = edge_id;
+      distance_into_edge = tr1_pos.front - current_pos + edge.length;
+      break;
+    }
+  }
+
+  double shared_distance = 0.0;
+  auto   it              = std::ranges::find(tr2_edges, tr1_edge_id);
+  if (it == tr2_edges.end()) {
+    // No (more) track is shared between trains
+    return 0.0;
+  }
+  auto tr2_edge_index = std::distance(tr2_edges.begin(), it);
+  for (auto i = tr2_edge_index; i < tr2_edges.size(); ++i) {
+    if (tr1_edges.at(tr1_edge_index) != tr2_edges.at(i)) {
+      return shared_distance;
+    }
+    tr1_edge_index++;
+
+    if (tr1_edge_id == tr2_edges.at(i)) {
+      // First shared edge, only add distance that has not been traversed by tr1
+      shared_distance += distance_into_edge;
+    } else {
+      const auto& edge =
+          get_instance()->get_const_network().get_edge(tr2_edges.at(i));
+      shared_distance += edge.length;
+    }
+  }
+  return shared_distance;
+}
+
 void cda_rail::simulator::EventSimulator::append_max_permitted_speed_movements(
     std::vector<TrainMovement>&  movements,
     std::span<const EdgeSegment> free_track, double initial_speed,

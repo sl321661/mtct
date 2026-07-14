@@ -252,6 +252,13 @@ private:
   calculate_optimal_train_movements(const std::vector<EdgeSegment>& free_track,
                                     double initial_speed, const Train& train);
 
+  [[nodiscard]] double get_shared_track_ahead_distance(TrainPosition& tr1_pos,
+                                                        size_t         tr1,
+                                                        size_t tr2) const;
+
+  [[nodiscard]] std::vector<TrainMovement> follow_train(size_t tr_follower,
+                                                        size_t tr_leader);
+
   /**
    * Calculates train movement which traverses a span of tracks as quickly as
    * possible and appends these to the movements vector passed by reference.
