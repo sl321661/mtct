@@ -188,6 +188,7 @@ cda_rail::simulator::EventSimulator::simulate(
     if (train_positions.at(current_train_id).front -
             train_edge_length(current_train_id) >
         -EPS) {
+      // TODO: disappear_at_partial_route_end not considered
       trains_in_network.erase(current_train_id);
       trains_finished_simulating.emplace(current_train_id);
       assert(train_dependencies.at(current_train_id).empty());
@@ -430,7 +431,9 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
       auto vertex_position = get_vertex_position(other_tr, vertex_id);
       if (train_positions.at(other_tr).rear < vertex_position) {
         // TODO: How close to vertex should train stop
-        auto distance_from_end = edge.length > 5 ? 5.0 : edge.length * 0.1;
+        auto distance_from_end = edge.length > MAX_STOP_DISTANCE_FROM_VERTEX
+                                     ? MAX_STOP_DISTANCE_FROM_VERTEX
+                                     : edge.length * 0.1;
         free_track.push_back({edge.length - distance_from_end, edge.max_speed});
         // end of free track
         return {free_track,
@@ -456,32 +459,21 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
 
 std::vector<cda_rail::simulator::EventSimulator::TrainMovement>
 cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
-    const std::vector<EdgeSegment>& free_track, const double initial_speed,
+    std::vector<EdgeSegment>& free_track, const double initial_speed,
     const Train& train) {
   // TODO: Does not account for limit_speed_by_leaving_edges = true
+  limit_segment_speeds(free_track, train.get_max_speed());
+
   auto current_position = 0.0;
   auto current_speed    = initial_speed;
   auto movements        = std::vector<TrainMovement>{};
 
   for (int segment_index = 0; segment_index < free_track.size();
        ++segment_index) {
-    // Get each segment ahead where the max speed is reduced relative to the
-    //  previous segment, this is used to calculate the earliest braking point
-    std::vector<MaxSpeedChangePoint> max_speed_reductions{};
-    auto                             previous_max_speed  = -1.0;
-    auto                             cumulative_position = 0.0;
-    for (int ahead_segment_index = segment_index;
-         ahead_segment_index < free_track.size(); ++ahead_segment_index) {
-      const auto& segment = free_track.at(ahead_segment_index);
-      if (segment.max_speed < previous_max_speed) {
-        max_speed_reductions.push_back(
-            {cumulative_position, segment.max_speed});
-      }
-      cumulative_position += segment.length;
-      previous_max_speed = segment.max_speed;
-    }
+    auto next_speed_restriction = find_first_speed_restriction(
+        free_track, segment_index, train, current_speed);
 
-    if (max_speed_reductions.empty()) {
+    if (!next_speed_restriction.has_value()) {
       // Max speed never decreases again, drive till the end as fast as possible
       append_max_permitted_speed_movements(
           movements,
@@ -491,29 +483,13 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
       return movements;
     }
 
-    // Find earliest braking point based on the points where max speed decreases
-    // First find the max speed of the earliest braking point
-    auto earliest_braking_point_speed_squared =
-        std::numeric_limits<double>::max();
-    auto earliest_braking_point_position = 0.0;
-    auto braking_point_target_speed      = 0.0;
-    for (auto& [point_position, new_max_speed] : max_speed_reductions) {
-      auto point_braking_point_speed_squared =
-          max_speed_squared_two_phase_travel(
-              current_speed, new_max_speed, train.get_acceleration(),
-              train.get_deceleration(), point_position);
-      if (point_braking_point_speed_squared <
-          earliest_braking_point_speed_squared) {
-        earliest_braking_point_speed_squared =
-            point_braking_point_speed_squared;
-        earliest_braking_point_position = point_position;
-        braking_point_target_speed      = new_max_speed;
-      }
-    }
+    auto [speed_restriction, restriction_peak_speed_squared] =
+        next_speed_restriction.value();
 
     // Calculate the train movements
+
     auto braking_point_position = distance_travelled_input_speed_squared(
-        squared(current_speed), earliest_braking_point_speed_squared,
+        squared(current_speed), restriction_peak_speed_squared,
         train.get_acceleration());
 
     for (auto next_segment_index = segment_index;
@@ -523,83 +499,80 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
         continue;
       const auto max_permitted_speed =
           std::min(next_segment.max_speed, train.get_max_speed());
-      auto distance_to_max_permitted_speed = distance_travelled(
-          current_speed, max_permitted_speed, train.get_acceleration());
+      auto distance_to_max_speed = distance_travelled(
+          current_speed, next_segment.max_speed, train.get_acceleration());
 
       // Consider different cases based on the travel on this segment
       if (braking_point_position < next_segment.length) {
-        if (earliest_braking_point_speed_squared <=
-            squared(max_permitted_speed)) {
+        if (restriction_peak_speed_squared <= squared(next_segment.max_speed)) {
           // Case 1 - Braking point on edge and v <= permitted_speed
           auto earliest_braking_point_speed =
-              std::sqrt(earliest_braking_point_speed_squared);
+              std::sqrt(restriction_peak_speed_squared);
           auto distance_to_peak =
               distance_travelled(current_speed, earliest_braking_point_speed,
                                  train.get_acceleration());
           movements.emplace_back(current_speed, earliest_braking_point_speed,
                                  train.get_acceleration(), distance_to_peak);
-          auto remaining_track      = next_segment.length - distance_to_peak;
-          auto future_segment_index = next_segment_index;
-          while (free_track.at(future_segment_index).max_speed >
-                 braking_point_target_speed) {
-            remaining_track += free_track.at(future_segment_index).length;
-            ++future_segment_index;
+          auto remaining_track       = next_segment.length - distance_to_peak;
+          auto skipped_segment_index = next_segment_index;
+          while (free_track.at(skipped_segment_index).max_speed >
+                 speed_restriction.new_max_speed) {
+            remaining_track += free_track.at(skipped_segment_index).length;
+            ++skipped_segment_index;
             // These edge segments are being considered here, so they can be
             //  'skipped' for future iterations of the outer loops
             ++segment_index;
             ++next_segment_index;
           }
           movements.emplace_back(earliest_braking_point_speed,
-                                 braking_point_target_speed,
+                                 speed_restriction.new_max_speed,
                                  -train.get_deceleration(), remaining_track);
           current_position += distance_to_peak + remaining_track;
-          current_speed = braking_point_target_speed;
+          current_speed = speed_restriction.new_max_speed;
           break;
         }
         // Case 2 - Braking point on edge and v > permitted_speed
-        if (!approx_equal(current_speed, max_permitted_speed))
-          movements.emplace_back(current_speed, max_permitted_speed,
+        if (!approx_equal(current_speed, next_segment.max_speed))
+          movements.emplace_back(current_speed, next_segment.max_speed,
                                  train.get_acceleration(),
-                                 distance_to_max_permitted_speed);
+                                 distance_to_max_speed);
         // Calculate new braking point from max permitted speed
-        auto distance_to_brake_from_max_permitted =
-            distance_travelled(max_permitted_speed, braking_point_target_speed,
-                               -train.get_deceleration());
-        auto coast_distance = earliest_braking_point_position -
-                              distance_to_max_permitted_speed -
+        auto distance_to_brake_from_max_permitted = distance_travelled(
+            next_segment.max_speed, speed_restriction.new_max_speed,
+            -train.get_deceleration());
+        auto coast_distance = speed_restriction.position -
+                              distance_to_max_speed -
                               distance_to_brake_from_max_permitted;
-        movements.emplace_back(max_permitted_speed, max_permitted_speed, 0.0,
-                               coast_distance);
-        movements.emplace_back(max_permitted_speed, braking_point_target_speed,
-                               -train.get_deceleration(),
-                               distance_to_brake_from_max_permitted);
-        auto future_segment_index = next_segment_index + 1;
-        auto skipped_distance     = 0.0;
-        while (free_track.at(future_segment_index).max_speed >
-               braking_point_target_speed) {
-          skipped_distance += free_track.at(future_segment_index).length;
-          ++future_segment_index;
+        movements.emplace_back(next_segment.max_speed, next_segment.max_speed,
+                               0.0, coast_distance);
+        movements.emplace_back(
+            next_segment.max_speed, speed_restriction.new_max_speed,
+            -train.get_deceleration(), distance_to_brake_from_max_permitted);
+        auto skipped_segment_index = next_segment_index + 1;
+        auto skipped_distance      = 0.0;
+        while (free_track.at(skipped_segment_index).max_speed >
+               speed_restriction.new_max_speed) {
+          skipped_distance += free_track.at(skipped_segment_index).length;
+          ++skipped_segment_index;
           // These edge segments are being considered here, so they can be
           //  'skipped' for future iterations of the outer loops
           ++segment_index;
           ++next_segment_index;
         }
         current_position += next_segment.length + skipped_distance;
-        current_speed = braking_point_target_speed;
+        current_speed = speed_restriction.new_max_speed;
         break;
       }
-      if (distance_to_max_permitted_speed < next_segment.length) {
+      if (distance_to_max_speed < next_segment.length) {
         // Case 3 - Braking point beyond edge and will exceed current speed
         //  limit
-        movements.emplace_back(current_speed, max_permitted_speed,
-                               train.get_acceleration(),
-                               distance_to_max_permitted_speed);
-        auto remaining_track =
-            next_segment.length - distance_to_max_permitted_speed;
-        movements.emplace_back(max_permitted_speed, max_permitted_speed, 0.0,
-                               remaining_track);
+        movements.emplace_back(current_speed, next_segment.max_speed,
+                               train.get_acceleration(), distance_to_max_speed);
+        auto remaining_track = next_segment.length - distance_to_max_speed;
+        movements.emplace_back(next_segment.max_speed, next_segment.max_speed,
+                               0.0, remaining_track);
         current_position += next_segment.length;
-        current_speed = max_permitted_speed;
+        current_speed = next_segment.max_speed;
         break;
       }
       // Case 4 - Braking point on edge and won't exceed current speed limit
@@ -613,6 +586,54 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
     }
   }
   return movements;
+}
+
+std::optional<
+    std::pair<cda_rail::simulator::EventSimulator::MaxSpeedChangePoint, double>>
+cda_rail::simulator::EventSimulator::find_first_speed_restriction(
+    const std::vector<EdgeSegment>& free_track, int init_segment_index,
+    const Train& train, double current_speed) {
+  // Find all points where the speed limit is reduced
+  std::vector<MaxSpeedChangePoint> max_speed_reductions{};
+  auto                             previous_max_speed  = -1.0;
+  auto                             cumulative_position = 0.0;
+  for (int segment_index = init_segment_index;
+       segment_index < free_track.size(); ++segment_index) {
+    const auto& segment = free_track.at(segment_index);
+    if (segment.max_speed < previous_max_speed) {
+      max_speed_reductions.emplace_back(cumulative_position, segment.max_speed);
+    }
+    cumulative_position += segment.length;
+    previous_max_speed = segment.max_speed;
+  }
+
+  // Of the points where the speed limit is reduced, find the first one which
+  //   needs to be considered by this train
+  auto peak_speed_squared      = std::numeric_limits<double>::max();
+  auto restriction_position    = 0.0;
+  auto restriction_speed_limit = 0.0;
+  for (auto& [point_position, new_max_speed] : max_speed_reductions) {
+    auto point_peak_speed_squared = max_speed_squared_two_phase_travel(
+        current_speed, new_max_speed, train.get_acceleration(),
+        train.get_deceleration(), point_position);
+    if (point_peak_speed_squared < peak_speed_squared) {
+      peak_speed_squared      = point_peak_speed_squared;
+      restriction_position    = point_position;
+      restriction_speed_limit = new_max_speed;
+    }
+  }
+
+  return {
+      {{restriction_position, restriction_speed_limit}, peak_speed_squared}};
+}
+
+void cda_rail::simulator::EventSimulator::limit_segment_speeds(
+    std::vector<EdgeSegment>& segments, double speed_limit) {
+  for (auto& s : segments) {
+    if (s.max_speed > speed_limit) {
+      s.max_speed = speed_limit;
+    }
+  }
 }
 
 double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
@@ -670,10 +691,8 @@ void cda_rail::simulator::EventSimulator::append_max_permitted_speed_movements(
   for (const auto& segment : free_track) {
     if (segment.length == 0)
       continue;
-    auto max_permitted_speed =
-        std::min(segment.max_speed, train.get_max_speed());
     auto distance_to_max_permitted_speed = distance_travelled(
-        current_speed, max_permitted_speed, train.get_acceleration());
+        current_speed, segment.max_speed, train.get_acceleration());
     if (distance_to_max_permitted_speed > segment.length) {
       auto speed_reached = std::sqrt(final_speed_squared(
           current_speed, train.get_acceleration(), segment.length));
@@ -681,14 +700,14 @@ void cda_rail::simulator::EventSimulator::append_max_permitted_speed_movements(
                              train.get_acceleration(), segment.length);
       current_speed = speed_reached;
     } else {
-      if (!approx_equal(current_speed, max_permitted_speed)) {
-        movements.emplace_back(current_speed, max_permitted_speed,
+      if (!approx_equal(current_speed, segment.max_speed)) {
+        movements.emplace_back(current_speed, segment.max_speed,
                                train.get_acceleration(),
                                distance_to_max_permitted_speed);
       }
-      movements.emplace_back(max_permitted_speed, max_permitted_speed, 0.0,
+      movements.emplace_back(segment.max_speed, segment.max_speed, 0.0,
                              segment.length - distance_to_max_permitted_speed);
-      current_speed = max_permitted_speed;
+      current_speed = segment.max_speed;
     }
   }
 }

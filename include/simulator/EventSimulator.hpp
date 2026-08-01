@@ -95,6 +95,8 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
+  const double MAX_STOP_DISTANCE_FROM_VERTEX = 5.0;
+
   /**
    * Describes linear train movement with initial speed u, final speed v,
    * acceleration a, distance traveled s over time t.
@@ -242,19 +244,52 @@ private:
 
   /**
    *
-   * @param free_track Vector of EdgeSegments describing the free track ahead
+   * @param free_track Vector of EdgeSegments describing the free track ahead.
+   * This parameter may be altered by the function
    * @param initial_speed initial speed at which train is traveling
    * @param train The train to calculate movements for
    * @return Series of train movements to traverse the free track as fast as
    * possible
    */
   [[nodiscard]] static std::vector<TrainMovement>
-  calculate_optimal_train_movements(const std::vector<EdgeSegment>& free_track,
+  calculate_optimal_train_movements(std::vector<EdgeSegment>& free_track,
                                     double initial_speed, const Train& train);
 
+  /**
+   * For a given series of EdgeSegments, returns the point of, and the speed
+   * restriction of the first point with a reduced speed limit which needs to be
+   * considered by a train. Also returns the peak speed squared achieved when
+   * accelerating for as long as possible and then braking until the point of
+   * the new restriction
+   * @param free_track vector of edge segments representing the track available
+   * to the train
+   * @param init_segment_index The index of the segment to start searching for
+   * new speed restrictions from
+   * @param train The train traversing the edges
+   * @param current_speed The train's current speed
+   * @return An optional which only has a value if there is another speed
+   * restriction ahead. The optional holds a pair with a MaxSpeedChangePoint,
+   * holding position and new speed limit of the restricting point, and a double
+   * representing the peak speed which can be reached while traveling to the
+   * point, squared.
+   */
+  static std::optional<std::pair<MaxSpeedChangePoint, double>>
+  find_first_speed_restriction(const std::vector<EdgeSegment>& free_track,
+                               int init_segment_index, const Train& train,
+                               double current_speed);
+
+  /**
+   * For each segment in segments, sets the max_speed to the minimum of the
+   * current value and the max_speed parameter.
+   * @param segments
+   * @param speed_limit
+   */
+  static void limit_segment_speeds(std::vector<EdgeSegment>& segments,
+                                   double                    speed_limit);
+
   [[nodiscard]] double get_shared_track_ahead_distance(TrainPosition& tr1_pos,
-                                                        size_t         tr1,
-                                                        size_t tr2) const;
+                                                       size_t         tr1,
+                                                       size_t tr2) const;
 
   [[nodiscard]] std::vector<TrainMovement> follow_train(size_t tr_follower,
                                                         size_t tr_leader);
