@@ -95,8 +95,6 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
-  const double MAX_STOP_DISTANCE_FROM_VERTEX = 5.0;
-
   /**
    * Describes linear train movement with initial speed u, final speed v,
    * acceleration a, distance traveled s over time t.
@@ -124,11 +122,11 @@ private:
   };
 
   /**
-   * Describes the stop at the end of some free track. The end can either be
-   * guaranteed (station), temporary (moving train, vertex order/TTD
+   * Describes the stop at the end of some free track. The end can either be a
+   * station stop, any temporary end (moving train, vertex order/TTD
    * restriction) or the end of the train's line
    */
-  enum class FreeTrackStopType { GuaranteedEnd, TemporaryEnd, LineEnd };
+  enum class FreeTrackStopType { StationStop, TemporaryEnd, LineEnd };
 
   /**
    * Describes a dependency which may appear at the end of a stretch of free
@@ -224,6 +222,7 @@ private:
    * @param train_positions Train positions
    * @param trains_in_network Trains in network, only these will be considered
    * for collisions on edges
+   * @param next_stop_indices
    * @param trains_on_edges
    * @param current_train ID of current train to find the free track end for
    * @returns Tuple of vector with free edge segments, the track end type, an
@@ -239,6 +238,7 @@ private:
   find_free_track_ahead(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
+      const std::vector<int>&                        next_stop_indices,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
       size_t                                         current_train) const;
 
