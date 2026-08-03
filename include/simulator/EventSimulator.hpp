@@ -160,10 +160,10 @@ private:
    * Describes a train dependence. The dependent_tr requires the leading train
    * to be at least required_distance along it's route to be able to continue.
    */
-  struct TrainDependence {
+  struct TrainDependency {
     size_t leading_tr;
     size_t dependent_tr;
-    double required_location;
+    double required_cleared_location;
   };
 
   struct MaxSpeedChangePoint {
@@ -180,7 +180,7 @@ private:
   using train_timestep_queue =
       std::priority_queue<TrainTimestep, std::vector<TrainTimestep>, Compare>;
 
-  using train_dependencies = std::vector<std::vector<TrainDependence>>;
+  using train_dependencies = std::vector<std::vector<TrainDependency>>;
 
   /**
    * Check whether a train can be entered into the network based on vertex and
@@ -188,18 +188,23 @@ private:
    * a position first, the first dependency found will be returned, else an
    * empty optional is returned.
    * @param train_positions All train positions
+   * @param trains_in_network
+   * @param trains_on_edges
    * @param train_id ID of train to enter
    * @remark This only returns an arbitrary dependency rather than the
    * first/last/all of them.
    * @return empty optional if the train can be entered into the network, else a
    * dependency of the train entering the network.
    */
-  [[nodiscard]] std::optional<TrainDependence>
+  [[nodiscard]] std::optional<TrainDependency>
   can_enter_train_or_get_dependency(
-      const std::vector<TrainPosition>& train_positions, size_t train_id) const;
+      const std::vector<TrainPosition>&              train_positions,
+      const std::unordered_set<size_t>&              trains_in_network,
+      const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+      size_t                                         train_id) const;
 
   [[nodiscard]] static std::optional<double> get_time_when_dependency_cleared(
-      const TrainDependence&            dependency,
+      const TrainDependency&            dependency,
       const std::vector<TrainMovement>& leading_movements,
       const TrainPosition&              leading_position);
 
@@ -214,6 +219,21 @@ private:
                    std::vector<TrainPosition>& train_positions,
                    std::vector<double>&        train_velocities,
                    size_t                      train_id) const;
+
+  bool
+  is_edge_ttd_free_for_tr(const std::vector<TrainPosition>& train_positions,
+                          size_t edge_id, size_t train_id,
+                          TrainDependency& out_dependency) const;
+
+  bool is_vertex_free_for_tr(const std::vector<TrainPosition>& train_positions,
+                             size_t vertex_id, size_t train_id,
+                             TrainDependency& out_dependency) const;
+
+  double edge_distance_free_for_tr(
+      const std::vector<TrainPosition>&              train_positions,
+      const std::unordered_set<size_t>&              trains_in_network,
+      const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+      size_t edge_id, size_t train_id, TrainDependency& out_dependency) const;
 
   /**
    * Get the position in the current_train's path where the train no longer has
@@ -234,7 +254,7 @@ private:
    */
   [[nodiscard]] std::tuple<
       std::vector<EdgeSegment>, FreeTrackStopType,
-      std::optional<std::pair<TrainDependence, FreeTrackDependencyType>>>
+      std::optional<std::pair<TrainDependency, FreeTrackDependencyType>>>
   find_free_track_ahead(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
@@ -331,7 +351,10 @@ private:
    * @return The total time needed to complete all the train movements
    */
   static double
-  get_movement_total_time(const std::span<const TrainMovement>& movements);
+  get_movements_total_time(const std::span<const TrainMovement>& movements);
+
+  static double
+  get_edge_segments_total_distance(std::span<const EdgeSegment> segments);
 
   static void move_train(TrainPosition& train_position, double& train_velocity,
                          std::vector<TrainMovement>& train_movements, double t);
