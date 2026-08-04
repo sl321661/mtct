@@ -202,7 +202,7 @@ cda_rail::simulator::EventSimulator::simulate(
     //  train scheduled to be the next to use it
     auto [free_track, stop_type, track_dependency] = find_free_track_ahead(
         train_positions, trains_in_network, train_next_stop_indices,
-        trains_on_edges, current_train_id);
+        trains_on_edges, current_train_id, {});
 
     if (stop_type == FreeTrackStopType::StationStop ||
         stop_type == FreeTrackStopType::TemporaryEnd) {
@@ -222,6 +222,36 @@ cda_rail::simulator::EventSimulator::simulate(
         free_track, train_velocities.at(current_train_id),
         train_list.get_train(current_train_id));
 
+    // Check if train can follow the ahead train, if possible, this will
+    //  generate new movements for the following train
+    auto iterative_simulation = false;
+    if (stop_type == FreeTrackStopType::TemporaryEnd &&
+        track_dependency->second == FreeTrackDependencyType::Follow) {
+      const auto separation     = get_edge_segments_total_distance(free_track);
+      const auto follow_results = follow_train(
+          train_positions, trains_in_network, train_next_stop_indices,
+          trains_on_edges, train_movements, current_train_id,
+          track_dependency->first.leading_tr, separation,
+          train_velocities.at(current_train_id));
+      if (!follow_results.has_value()) {
+        const auto iterative_movements =
+            get_iterative_movements(next_movements);
+        // If there is a value the normal movements are too short and are
+        //  extended so that there is at least a minimum amount of time between
+        //  successive time steps for the same train
+        if (iterative_movements.has_value()) {
+          next_movements       = iterative_movements.value();
+          iterative_simulation = true;
+        }
+      } else {
+        auto [new_movements, new_stop_type, new_dependency] =
+            follow_results.value();
+        next_movements   = new_movements;
+        stop_type        = new_stop_type;
+        track_dependency = new_dependency;
+      }
+    }
+
     // Check that train reaches exit target velocity
     if (free_path_includes_exit &&
         !approx_equal(next_movements[next_movements.size() - 1].v,
@@ -232,38 +262,47 @@ cda_rail::simulator::EventSimulator::simulate(
 
     // Handle service at station at end of train's movements
     if (stop_type == FreeTrackStopType::StationStop) {
-      const auto  si   = train_next_stop_indices.at(current_train_id);
-      const auto& stop = get_instance()
-                             ->get_const_schedule(current_train_id)
-                             .get_stops()
-                             .at(si);
-      const auto service_start   = t + get_movements_total_time(next_movements);
-      const auto time_to_service = stop.get_service_time() - service_start;
-      const auto time_at_station =
-          time_to_service > 0 ? time_to_service + stop.get_service_duration()
-                              : stop.get_service_duration();
-      next_movements.emplace_back(0.0, 0.0, 0.0, 0.0, time_at_station);
-
-      if (get_stop_positions_of_tr(current_train_id).size() ==
-          train_next_stop_indices.at(current_train_id) + 1) {
-        // No more stops
-        train_next_stop_indices.at(current_train_id) = -1;
-      } else {
-        train_next_stop_indices.at(current_train_id)++;
-      }
+      add_stop_at_next_station(train_next_stop_indices, next_movements, t,
+                               current_train_id);
     }
 
     auto total_time = get_movements_total_time(next_movements);
+    if (stop_type == FreeTrackStopType::LineEnd) {
+      // Ensure the train is simulated again at line end so that it can exit the
+      //  network
+      auto next_timestep = t + total_time;
+      upcoming_train_timesteps.push({current_train_id, next_timestep});
+    } else if (iterative_simulation) {
+      // This train is following closely behind another and must be simulated
+      //  iteratively
+      auto next_timestep =
+          t + total_time - next_movements.at(next_movements.size() - 1).t;
+      upcoming_train_timesteps.push({current_train_id, next_timestep});
+    } else if (track_dependency.has_value()) {
+      const auto [dependency, dependency_type] = track_dependency.value();
+      if (dependency_type == FreeTrackDependencyType::Pass) {
+        // Check if dependency will be cleared soon under already calculated
+        //  movements
+        const auto cleared_at = get_time_when_dependency_cleared(
+            dependency, train_movements.at(dependency.leading_tr),
+            train_positions.at(dependency.leading_tr));
+        if (cleared_at.has_value()) {
+          // Time when dependency is cleared is already known
+          // Add time as current train's next timestep
+          upcoming_train_timesteps.push(
+              {current_train_id, t + cleared_at.value()});
+        } else {
+          train_dependencies.at(dependency.leading_tr).push_back(dependency);
+        }
+      } else if (dependency_type == FreeTrackDependencyType::Follow) {
+        // When the next dependency requires following, simulate again before
+        //  starting to brake
+        auto next_timestep =
+            t + total_time - next_movements.at(next_movements.size() - 1).t;
+        upcoming_train_timesteps.push({current_train_id, next_timestep});
+      }
+    }
 
-    // If the stop at the end of the free track is not guaranteed (i.e. may
-    //  disappear by the time needs to brake for it) then recalculate free
-    //  track before the train starts braking for it.
-    auto next_timestep =
-        stop_type != FreeTrackStopType::TemporaryEnd
-            ? t + total_time
-            : t + total_time - next_movements.at(next_movements.size() - 1).t;
-
-    upcoming_train_timesteps.push({current_train_id, next_timestep});
     train_movements.at(current_train_id) = next_movements;
 
     // Check whether new movements clear another train's dependency
@@ -397,7 +436,8 @@ void cda_rail::simulator::EventSimulator::enter_train(
 
 bool cda_rail::simulator::EventSimulator::is_edge_ttd_free_for_tr(
     const std::vector<TrainPosition>& train_positions, const size_t edge_id,
-    const size_t train_id, TrainDependency& out_dependency) const {
+    const size_t train_id, TrainDependency& out_dependency,
+    const std::unordered_set<size_t>& ignored_trains) const {
   const auto ttd = get_ttd(edge_id);
   if (!ttd.has_value()) {
     return true;
@@ -407,6 +447,9 @@ bool cda_rail::simulator::EventSimulator::is_edge_ttd_free_for_tr(
   for (const auto other_tr : ttd_order) {
     if (train_id == other_tr) {
       break;
+    }
+    if (ignored_trains.contains(other_tr)) {
+      continue;
     }
     const auto train_ttd_position = train_ttd_end_position(
         train_positions.at(other_tr), other_tr, ttd.value());
@@ -422,11 +465,15 @@ bool cda_rail::simulator::EventSimulator::is_edge_ttd_free_for_tr(
 
 bool cda_rail::simulator::EventSimulator::is_vertex_free_for_tr(
     const std::vector<TrainPosition>& train_positions, size_t vertex_id,
-    size_t train_id, TrainDependency& out_dependency) const {
+    size_t train_id, TrainDependency& out_dependency,
+    const std::unordered_set<size_t>& ignored_trains) const {
   const auto vertex_order = get_vertex_orders_of_vertex(vertex_id);
   for (const auto other_tr : vertex_order) {
     if (other_tr == train_id) {
       break;
+    }
+    if (ignored_trains.contains(other_tr)) {
+      continue;
     }
     // Check if train which must pass vertex first has already passed
     // If any train which must pass first has not yet passed, set out dependency
@@ -444,7 +491,8 @@ double cda_rail::simulator::EventSimulator::edge_distance_free_for_tr(
     const std::vector<TrainPosition>&              train_positions,
     const std::unordered_set<size_t>&              trains_in_network,
     const std::vector<std::unordered_set<size_t>>& trains_on_edges,
-    size_t edge_id, size_t train_id, TrainDependency& out_dependency) const {
+    size_t edge_id, size_t train_id, TrainDependency& out_dependency,
+    const std::unordered_set<size_t>& ignored_trains) const {
   // Check if there is a train on the edge
   const auto& edge = get_instance()->get_const_network().get_edge(edge_id);
   auto        min_free_distance = std::numeric_limits<double>::max();
@@ -453,7 +501,8 @@ double cda_rail::simulator::EventSimulator::edge_distance_free_for_tr(
 
   for (const auto other_tr_id : trains_in_network) {
     if (other_tr_id == train_id ||
-        !trains_on_edges.at(edge_id).contains(other_tr_id)) {
+        !trains_on_edges.at(edge_id).contains(other_tr_id) ||
+        ignored_trains.contains(other_tr_id)) {
       continue;
     }
     // Train is scheduled to be on edge
@@ -499,7 +548,8 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
     const std::unordered_set<size_t>&              trains_in_network,
     const std::vector<int>&                        next_stop_indices,
     const std::vector<std::unordered_set<size_t>>& trains_on_edges,
-    const size_t                                   current_train) const {
+    const size_t                                   current_train,
+    const std::unordered_set<size_t>&              ignored_trains) const {
   auto       front_pos       = train_positions.at(current_train).front;
   const auto current_edge_id = get_edge_at_position(current_train, front_pos);
   // Distance into current edge is needed so only the remaining part of the edge
@@ -527,8 +577,9 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
     const auto  edge_id = edges.at(ei);
     const auto& edge    = get_instance()->get_const_network().get_edge(edge_id);
     // Check edge TTD
-    if (TrainDependency ttd_dependency{}; !is_edge_ttd_free_for_tr(
-            train_positions, edge_id, current_train, ttd_dependency)) {
+    if (TrainDependency ttd_dependency{};
+        !is_edge_ttd_free_for_tr(train_positions, edge_id, current_train,
+                                 ttd_dependency, ignored_trains)) {
       // TTD is blocked, train shouldn't already be on edge
       assert(distance_into_current_edge == 0.0);
       return {free_track,
@@ -539,9 +590,11 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
     // Check if there is a train on the edge
     TrainDependency edge_dependency{};
 
-    auto free_distance = edge_distance_free_for_tr(
-        train_positions, trains_in_network, trains_on_edges, edge_id,
-        current_train, edge_dependency);
+    auto free_distance =
+        edge_distance_free_for_tr(train_positions, trains_in_network,
+                                  trains_on_edges, edge_id, current_train,
+                                  edge_dependency, ignored_trains) -
+        distance_into_current_edge;
     if (free_distance == 0.0) {
       // Start of edge is blocked
       return {free_track,
@@ -569,8 +622,9 @@ cda_rail::simulator::EventSimulator::find_free_track_ahead(
 
     // Check whether the following vertex order dictates that a different
     //  train must pass through it first
-    if (TrainDependency vertex_dependency{}; !is_vertex_free_for_tr(
-            train_positions, edge.target, current_train, vertex_dependency)) {
+    if (TrainDependency vertex_dependency{};
+        !is_vertex_free_for_tr(train_positions, edge.target, current_train,
+                               vertex_dependency, ignored_trains)) {
       // end of free track
       free_track.push_back(
           {edge.length - distance_into_current_edge, edge.max_speed});
@@ -647,8 +701,9 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
           auto distance_to_peak =
               distance_travelled(current_speed, earliest_braking_point_speed,
                                  train.get_acceleration());
-          movements.emplace_back(current_speed, earliest_braking_point_speed,
-                                 train.get_acceleration(), distance_to_peak);
+          push_back_movement_if_not_zero(
+              movements, {current_speed, earliest_braking_point_speed,
+                          train.get_acceleration(), distance_to_peak});
           auto remaining_track       = next_segment.length - distance_to_peak;
           auto skipped_segment_index = next_segment_index + 1;
           while (free_track.at(skipped_segment_index).max_speed >
@@ -660,18 +715,19 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
             ++segment_index;
             ++next_segment_index;
           }
-          movements.emplace_back(earliest_braking_point_speed,
-                                 speed_restriction.new_max_speed,
-                                 -train.get_deceleration(), remaining_track);
+          push_back_movement_if_not_zero(
+              movements,
+              {earliest_braking_point_speed, speed_restriction.new_max_speed,
+               -train.get_deceleration(), remaining_track});
           current_position += distance_to_peak + remaining_track;
           current_speed = speed_restriction.new_max_speed;
           break;
         }
         // Case 2 - Braking point on edge and v > permitted_speed
         if (!approx_equal(current_speed, next_segment.max_speed))
-          movements.emplace_back(current_speed, next_segment.max_speed,
-                                 train.get_acceleration(),
-                                 distance_to_max_speed);
+          push_back_movement_if_not_zero(
+              movements, {current_speed, next_segment.max_speed,
+                          train.get_acceleration(), distance_to_max_speed});
         // Calculate new braking point from max permitted speed
         auto distance_to_brake_from_max_permitted = distance_travelled(
             next_segment.max_speed, speed_restriction.new_max_speed,
@@ -679,11 +735,13 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
         auto coast_distance = speed_restriction.position -
                               distance_to_max_speed -
                               distance_to_brake_from_max_permitted;
-        movements.emplace_back(next_segment.max_speed, next_segment.max_speed,
-                               0.0, coast_distance);
-        movements.emplace_back(
-            next_segment.max_speed, speed_restriction.new_max_speed,
-            -train.get_deceleration(), distance_to_brake_from_max_permitted);
+        push_back_movement_if_not_zero(movements, {next_segment.max_speed,
+                                                   next_segment.max_speed, 0.0,
+                                                   coast_distance});
+        push_back_movement_if_not_zero(
+            movements,
+            {next_segment.max_speed, speed_restriction.new_max_speed,
+             -train.get_deceleration(), distance_to_brake_from_max_permitted});
         auto skipped_segment_index = next_segment_index + 1;
         auto skipped_distance      = 0.0;
         while (free_track.at(skipped_segment_index).max_speed >
@@ -702,11 +760,13 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
       if (distance_to_max_speed < next_segment.length) {
         // Case 3 - Braking point beyond edge and will exceed current speed
         //  limit
-        movements.emplace_back(current_speed, next_segment.max_speed,
-                               train.get_acceleration(), distance_to_max_speed);
+        push_back_movement_if_not_zero(
+            movements, {current_speed, next_segment.max_speed,
+                        train.get_acceleration(), distance_to_max_speed});
         auto remaining_track = next_segment.length - distance_to_max_speed;
-        movements.emplace_back(next_segment.max_speed, next_segment.max_speed,
-                               0.0, remaining_track);
+        push_back_movement_if_not_zero(movements, {next_segment.max_speed,
+                                                   next_segment.max_speed, 0.0,
+                                                   remaining_track});
         current_position += next_segment.length;
         current_speed = next_segment.max_speed;
         break;
@@ -714,14 +774,22 @@ cda_rail::simulator::EventSimulator::calculate_optimal_train_movements(
       // Case 4 - Braking point on edge and won't exceed current speed limit
       auto speed_reached = std::sqrt(final_speed_squared(
           current_speed, train.get_acceleration(), next_segment.length));
-      movements.emplace_back(current_speed, speed_reached,
-                             train.get_acceleration(), next_segment.length);
+      push_back_movement_if_not_zero(movements, {current_speed, speed_reached,
+                                                 train.get_acceleration(),
+                                                 next_segment.length});
       current_position += next_segment.length;
       current_speed = speed_reached;
       // No break - continue with next segment without recalculating v^2
     }
   }
   return movements;
+}
+
+void cda_rail::simulator::EventSimulator::push_back_movement_if_not_zero(
+    std::vector<TrainMovement>& movements, const TrainMovement& m) {
+  if (m.s == 0 && m.t == 0)
+    return;
+  movements.push_back(m);
 }
 
 std::optional<
@@ -776,7 +844,7 @@ void cda_rail::simulator::EventSimulator::limit_segment_speeds(
 }
 
 double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
-    TrainPosition& tr1_pos, size_t tr1, size_t tr2) const {
+    const TrainPosition& tr1_pos, size_t tr1, size_t tr2) const {
   const auto& tr1_edges = get_train_edges_of_tr(tr1);
   const auto& tr2_edges = get_train_edges_of_tr(tr2);
 
@@ -805,21 +873,225 @@ double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
   }
   auto tr2_edge_index = std::distance(tr2_edges.begin(), it);
   for (auto i = tr2_edge_index; i < tr2_edges.size(); ++i) {
+    if (tr1_edge_index >= tr1_edges.size()) {
+      break;
+    }
     if (tr1_edges.at(tr1_edge_index) != tr2_edges.at(i)) {
-      return shared_distance;
+      break;
     }
     tr1_edge_index++;
 
+    const auto& edge =
+        get_instance()->get_const_network().get_edge(tr2_edges.at(i));
     if (tr1_edge_id == tr2_edges.at(i)) {
       // First shared edge, only add distance that has not been traversed by tr1
-      shared_distance += distance_into_edge;
+      shared_distance += edge.length - distance_into_edge;
     } else {
-      const auto& edge =
-          get_instance()->get_const_network().get_edge(tr2_edges.at(i));
       shared_distance += edge.length;
     }
   }
   return shared_distance;
+}
+
+std::optional<std::tuple<
+    std::vector<cda_rail::simulator::EventSimulator::TrainMovement>,
+    cda_rail::simulator::EventSimulator::FreeTrackStopType,
+    std::optional<std::pair<
+        cda_rail::simulator::EventSimulator::TrainDependency,
+        cda_rail::simulator::EventSimulator::FreeTrackDependencyType>>>>
+cda_rail::simulator::EventSimulator::follow_train(
+    const std::vector<TrainPosition>&              train_positions,
+    const std::unordered_set<size_t>&              trains_in_network,
+    const std::vector<int>&                        next_stop_indices,
+    const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+    const std::vector<std::vector<TrainMovement>>& train_movements,
+    const size_t tr_follower, const size_t tr_leader, double tr_separation,
+    double tr_follower_speed) const {
+  const auto& tr_follower_obj =
+      get_instance()->get_const_train_list().get_train(tr_follower);
+  const auto leader_max_follow_distance =
+      get_distance_of_constant_speed_movements(train_movements.at(tr_leader));
+  const auto shared_track_distance = get_shared_track_ahead_distance(
+      train_positions.at(tr_follower), tr_follower, tr_leader);
+  const auto edge_after_shared_track = get_edge_id_after(
+      tr_follower, get_edge_at_position(tr_follower, shared_track_distance));
+  double edge_after_shared_track_max_speed = -1.0;
+  if (edge_after_shared_track.has_value()) {
+    edge_after_shared_track_max_speed =
+        get_instance()
+            ->get_const_network()
+            .get_edge(edge_after_shared_track.value())
+            .max_speed;
+  }
+
+  // Get free track while ignoring the leading train
+  const auto [follower_free_track, stop_type, dependency] =
+      find_free_track_ahead(train_positions, trains_in_network,
+                            next_stop_indices, trains_on_edges, tr_follower,
+                            {tr_leader});
+  const auto follow_speed = train_movements.at(tr_leader).at(0).u;
+  const auto tr_follower_braking_distance =
+      tr_braking_distance(tr_follower, follow_speed);
+  const auto follower_free_track_length =
+      get_edge_segments_total_distance(follower_free_track);
+
+  const auto shared_track_br_distance =
+      distance_travelled(follow_speed, edge_after_shared_track_max_speed,
+                         tr_follower_obj.get_deceleration());
+
+  // Determine how long the train can follow the leader, this is the
+  // minimum
+  //  value out of the following: distance which leader is traveling
+  //  at the constant speed for (plus distance to catch up to the
+  //  train), the track that the trains share, relative from the
+  //  follower, and the track the following train is able to move at
+  //  this speed
+
+  auto follow_distance =
+      leader_max_follow_distance - tr_follower_braking_distance;
+  auto end_follow_reason = EndFollowingReason::LeaderVariableSpeed;
+  if (shared_track_distance < follow_distance) {
+    follow_distance   = shared_track_distance - shared_track_br_distance;
+    end_follow_reason = EndFollowingReason::EndSharedTrack;
+  }
+  if (follower_free_track_length < follow_distance) {
+    follow_distance = follower_free_track_length - tr_follower_braking_distance;
+    end_follow_reason = EndFollowingReason::EndFollowerFreeTrack;
+  }
+
+  auto to_follow = follow_distance;
+
+  // Get action necessary to bring following train to same speed as
+  // leader
+  if (tr_follower_obj.get_max_speed() < follow_speed) {
+    return {};
+  }
+  std::vector<TrainMovement> new_movements{};
+  if (!approx_equal(tr_follower_speed, follow_speed)) {
+    if (tr_follower_speed - follow_speed > EPS) {
+      // speed > follow_speed
+      if (distance_travelled(tr_follower_speed, follow_speed,
+                             -tr_follower_obj.get_deceleration()) >
+          follow_distance) {
+        new_movements.emplace_back(
+            tr_follower_speed,
+            std::sqrt(final_speed_squared(tr_follower_speed,
+                                          -tr_follower_obj.get_deceleration(),
+                                          follow_distance)),
+            -tr_follower_obj.get_deceleration());
+        to_follow -= follow_distance;
+      } else {
+        new_movements.emplace_back(tr_follower_speed, follow_speed,
+                                   -tr_follower_obj.get_deceleration());
+        to_follow -= new_movements.back().s;
+      }
+    } else if (tr_follower_speed - follow_speed < -EPS) {
+      // speed < follow_speed
+      if (distance_travelled(tr_follower_speed, follow_speed,
+                             tr_follower_obj.get_acceleration()) >
+          follow_distance) {
+        new_movements.emplace_back(
+            tr_follower_speed,
+            std::sqrt(final_speed_squared(tr_follower_speed,
+                                          tr_follower_obj.get_acceleration(),
+                                          follow_distance)),
+            tr_follower_obj.get_acceleration());
+        to_follow -= follow_distance;
+      } else {
+        new_movements.emplace_back(tr_follower_speed, follow_speed,
+                                   tr_follower_obj.get_acceleration());
+        to_follow -= new_movements.back().s;
+      }
+    }
+
+    auto time_taken       = new_movements.back().t;
+    auto separation_delta = follow_speed * time_taken - new_movements.back().s;
+    tr_separation += separation_delta;
+  }
+
+  // Only allow following if the separation is not too large
+  if (tr_separation >
+      MAX_BRAKING_DISTANCES_TO_FOLLOW_TRAIN * tr_follower_braking_distance) {
+    return {};
+  }
+
+  if (to_follow < EPS) {
+    assert(!new_movements.empty());
+    new_movements.emplace_back(new_movements.back().v, 0.0,
+                               -tr_follower_obj.get_deceleration());
+  } else {
+    new_movements.emplace_back(follow_speed, follow_speed, 0.0, to_follow);
+  }
+
+  if (new_movements.back().v != follow_speed) {
+    return {};
+  }
+
+  switch (end_follow_reason) {
+  case EndFollowingReason::LeaderVariableSpeed:
+    new_movements.emplace_back(follow_speed, 0.0,
+                               -tr_follower_obj.get_deceleration());
+    return {
+        {new_movements,
+         FreeTrackStopType::TemporaryEnd,
+         {{{tr_leader, tr_follower, -1.0}, FreeTrackDependencyType::Follow}}}};
+  case EndFollowingReason::EndSharedTrack:
+    new_movements.emplace_back(follow_speed, edge_after_shared_track_max_speed,
+                               -tr_follower_obj.get_deceleration());
+    return {{new_movements, FreeTrackStopType::GuaranteedEnd, {}}};
+  case EndFollowingReason::EndFollowerFreeTrack:
+    new_movements.emplace_back(follow_speed, 0.0,
+                               -tr_follower_obj.get_deceleration());
+    return {{new_movements, stop_type, dependency}};
+  }
+  return {};
+}
+
+std::optional<size_t>
+cda_rail::simulator::EventSimulator::get_edge_id_after(size_t train_id,
+                                                       size_t edge_id) const {
+  const auto tr_edges = get_train_edges_of_tr(train_id);
+  auto       index    = std::ranges::find(tr_edges, edge_id) - tr_edges.begin();
+  index++;
+  if (tr_edges.size() <= index) {
+    return {};
+  }
+  return tr_edges.at(index);
+}
+
+double
+cda_rail::simulator::EventSimulator::get_distance_of_constant_speed_movements(
+    const std::vector<TrainMovement>& movements) {
+  double total = 0.0;
+  for (const auto& m : movements) {
+    if (m.a != 0.0) {
+      break;
+    }
+    total += m.s;
+  }
+  return total;
+}
+
+std::optional<std::vector<cda_rail::simulator::EventSimulator::TrainMovement>>
+cda_rail::simulator::EventSimulator::get_iterative_movements(
+    const std::vector<TrainMovement>& movements) {
+  const auto movements_before_last =
+      std::span{movements}.subspan(0, movements.size() - 1);
+  const auto total_time_movements_before_last =
+      get_movements_total_time(movements_before_last);
+  if (total_time_movements_before_last > ITERATIVE_MOVEMENT_TIME_WIDTH) {
+    return {};
+  }
+  // Ensure that train moves for the minimum time width before getting the next
+  std::vector<TrainMovement> new_movements(movements.begin(),
+                                           movements.end() - 1);
+
+  const auto v = final_speed_time(movements.back().u, movements.back().a,
+                                  ITERATIVE_MOVEMENT_TIME_WIDTH -
+                                      total_time_movements_before_last);
+  new_movements.emplace_back(movements.back().u, v, movements.back().a);
+  new_movements.emplace_back(v, movements.back().v, movements.back().a);
+  return {new_movements};
 }
 
 void cda_rail::simulator::EventSimulator::append_max_permitted_speed_movements(
@@ -874,6 +1146,29 @@ double cda_rail::simulator::EventSimulator::get_edge_segments_total_distance(
     total += segment.length;
   }
   return total;
+}
+
+void cda_rail::simulator::EventSimulator::add_stop_at_next_station(
+    std::vector<int>&           train_next_stop_indices,
+    std::vector<TrainMovement>& next_movements, const double t,
+    const size_t current_train_id) const {
+  const auto  si = train_next_stop_indices.at(current_train_id);
+  const auto& stop =
+      get_instance()->get_const_schedule(current_train_id).get_stops().at(si);
+  const auto service_start   = t + get_movements_total_time(next_movements);
+  const auto time_to_service = stop.get_service_time() - service_start;
+  const auto time_at_station =
+      time_to_service > 0 ? time_to_service + stop.get_service_duration()
+                          : stop.get_service_duration();
+  next_movements.emplace_back(0.0, 0.0, 0.0, 0.0, time_at_station);
+
+  if (get_stop_positions_of_tr(current_train_id).size() ==
+      train_next_stop_indices.at(current_train_id) + 1) {
+    // No more stops
+    train_next_stop_indices.at(current_train_id) = -1;
+  } else {
+    train_next_stop_indices.at(current_train_id)++;
+  }
 }
 
 void cda_rail::simulator::EventSimulator::move_train(

@@ -95,6 +95,14 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
+  // A train must be less than this * braking distance away from a leading train
+  //  to attempt to follow it directly
+  static constexpr double MAX_BRAKING_DISTANCES_TO_FOLLOW_TRAIN = 2.5;
+
+  // If a train must be moved iteratively (instead of event-driven) use this
+  //  time-step width
+  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH = 1.0;
+
   /**
    * Describes linear train movement with initial speed u, final speed v,
    * acceleration a, distance traveled s over time t.
@@ -123,10 +131,16 @@ private:
 
   /**
    * Describes the stop at the end of some free track. The end can either be a
-   * station stop, any temporary end (moving train, vertex order/TTD
-   * restriction) or the end of the train's line
+   * station stop, any other type of guaranteed end which will not change, any
+   * temporary end (moving train, vertex order/TTD restriction) or the end of
+   * the train's line
    */
-  enum class FreeTrackStopType { StationStop, TemporaryEnd, LineEnd };
+  enum class FreeTrackStopType {
+    StationStop,
+    GuaranteedEnd,
+    TemporaryEnd,
+    LineEnd
+  };
 
   /**
    * Describes a dependency which may appear at the end of a stretch of free
@@ -134,6 +148,16 @@ private:
    * certain point.
    */
   enum class FreeTrackDependencyType { Follow, Pass };
+
+  /**
+   * Gives a reason for why a train must stop following a leading train at a
+   * certain point.
+   */
+  enum class EndFollowingReason {
+    LeaderVariableSpeed,
+    EndSharedTrack,
+    EndFollowerFreeTrack
+  };
 
   /**
    * Describes (part of) an edge, storing only length and max_speed
@@ -220,20 +244,48 @@ private:
                    std::vector<double>&        train_velocities,
                    size_t                      train_id) const;
 
+  bool is_edge_ttd_free_for_tr(
+      const std::vector<TrainPosition>& train_positions, size_t edge_id,
+      size_t train_id, TrainDependency& out_dependency,
+      const std::unordered_set<size_t>& ignored_trains) const;
+
   bool
   is_edge_ttd_free_for_tr(const std::vector<TrainPosition>& train_positions,
                           size_t edge_id, size_t train_id,
-                          TrainDependency& out_dependency) const;
+                          TrainDependency& out_dependency) const {
+    return is_edge_ttd_free_for_tr(train_positions, edge_id, train_id,
+                                   out_dependency, {});
+  }
+
+  bool
+  is_vertex_free_for_tr(const std::vector<TrainPosition>& train_positions,
+                        size_t vertex_id, size_t train_id,
+                        TrainDependency&                  out_dependency,
+                        const std::unordered_set<size_t>& ignored_trains) const;
 
   bool is_vertex_free_for_tr(const std::vector<TrainPosition>& train_positions,
                              size_t vertex_id, size_t train_id,
-                             TrainDependency& out_dependency) const;
+                             TrainDependency& out_dependency) const {
+    return is_vertex_free_for_tr(train_positions, vertex_id, train_id,
+                                 out_dependency, {});
+  }
 
   double edge_distance_free_for_tr(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
-      size_t edge_id, size_t train_id, TrainDependency& out_dependency) const;
+      size_t edge_id, size_t train_id, TrainDependency& out_dependency,
+      const std::unordered_set<size_t>& ignored_trains) const;
+
+  double edge_distance_free_for_tr(
+      const std::vector<TrainPosition>&              train_positions,
+      const std::unordered_set<size_t>&              trains_in_network,
+      const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+      size_t edge_id, size_t train_id, TrainDependency& out_dependency) const {
+    return edge_distance_free_for_tr(train_positions, trains_in_network,
+                                     trains_on_edges, edge_id, train_id,
+                                     out_dependency, {});
+  }
 
   /**
    * Get the position in the current_train's path where the train no longer has
@@ -245,6 +297,8 @@ private:
    * @param next_stop_indices
    * @param trains_on_edges
    * @param current_train ID of current train to find the free track end for
+   * @param ignored_trains A set of trains to ignore when finding the free track
+   * ahead.
    * @returns Tuple of vector with free edge segments, the track end type, an
    * optional pair of dependency, and a free track dependency type. The optional
    * has a value if the track ends due to waiting for another train to first
@@ -260,7 +314,8 @@ private:
       const std::unordered_set<size_t>&              trains_in_network,
       const std::vector<int>&                        next_stop_indices,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
-      size_t                                         current_train) const;
+      size_t                                         current_train,
+      const std::unordered_set<size_t>&              ignored_trains) const;
 
   /**
    *
@@ -274,6 +329,9 @@ private:
   [[nodiscard]] static std::vector<TrainMovement>
   calculate_optimal_train_movements(std::vector<EdgeSegment>& free_track,
                                     double initial_speed, const Train& train);
+
+  void static push_back_movement_if_not_zero(
+      std::vector<TrainMovement>& movements, const TrainMovement& m);
 
   /**
    * For a given series of EdgeSegments, returns the point of, and the speed
@@ -307,12 +365,53 @@ private:
   static void limit_segment_speeds(std::vector<EdgeSegment>& segments,
                                    double                    speed_limit);
 
-  [[nodiscard]] double get_shared_track_ahead_distance(TrainPosition& tr1_pos,
-                                                       size_t         tr1,
-                                                       size_t tr2) const;
+  [[nodiscard]] double
+  get_shared_track_ahead_distance(const TrainPosition& tr1_pos, size_t tr1,
+                                  size_t tr2) const;
 
-  [[nodiscard]] std::vector<TrainMovement> follow_train(size_t tr_follower,
-                                                        size_t tr_leader);
+  /**
+   *
+   * @param train_positions
+   * @param trains_in_network
+   * @param next_stop_indices
+   * @param trains_on_edges
+   * @param train_movements
+   * @param tr_follower
+   * @param tr_leader
+   * @param tr_separation
+   * @param tr_follower_speed
+   * @return Returns an empty optional if following isn't possible in the
+   * current state, else returns a tuple with the new movements which include
+   * the 'following' actions, the stop type following the movements, and an
+   * optional pair of dependency and dependency type which has a value if the
+   * end of the movements include another dependency.
+   */
+  [[nodiscard]] std::optional<std::tuple<
+      std::vector<TrainMovement>, FreeTrackStopType,
+      std::optional<std::pair<TrainDependency, FreeTrackDependencyType>>>>
+  follow_train(const std::vector<TrainPosition>&              train_positions,
+               const std::unordered_set<size_t>&              trains_in_network,
+               const std::vector<int>&                        next_stop_indices,
+               const std::vector<std::unordered_set<size_t>>& trains_on_edges,
+               const std::vector<std::vector<TrainMovement>>& train_movements,
+               size_t tr_follower, size_t tr_leader, double tr_separation,
+               double tr_follower_speed) const;
+
+  [[nodiscard]]
+  std::optional<size_t> get_edge_id_after(size_t train_id,
+                                          size_t edge_id) const;
+
+  /**
+   * Get the distance from the start for which there is no acceleration and
+   * therefore movement at a constant speed
+   * @param movements
+   * @return Distance from the start where movements have no acceleration
+   */
+  [[nodiscard]] static double get_distance_of_constant_speed_movements(
+      const std::vector<TrainMovement>& movements);
+
+  static std::optional<std::vector<TrainMovement>>
+  get_iterative_movements(const std::vector<TrainMovement>& movements);
 
   /**
    * Calculates train movement which traverses a span of tracks as quickly as
@@ -355,6 +454,10 @@ private:
 
   static double
   get_edge_segments_total_distance(std::span<const EdgeSegment> segments);
+
+  void add_stop_at_next_station(std::vector<int>& train_next_stop_indices,
+                                std::vector<TrainMovement>& next_movements,
+                                double t, size_t current_train_id) const;
 
   static void move_train(TrainPosition& train_position, double& train_velocity,
                          std::vector<TrainMovement>& train_movements, double t);
