@@ -258,12 +258,31 @@ cda_rail::simulator::EventSimulator::simulate(
     // If the stop at the end of the free track is not guaranteed (i.e. may
     //  disappear by the time needs to brake for it) then recalculate free
     //  track before the train starts braking for it.
-    auto next_timestep =
-        stop_type != FreeTrackStopType::TemporaryEnd
-            ? t + total_time
-            : t + total_time - next_movements.at(next_movements.size() - 1).t;
+    if (stop_type == FreeTrackStopType::LineEnd ||
+        stop_type == FreeTrackStopType::StationStop) {
+      // Next timestep is after movements, where train will continue or leave
+      //  the network
+      upcoming_train_timesteps.push({current_train_id, t + total_time});
+    } else if (stop_type == FreeTrackStopType::TemporaryEnd) {
+      const auto [dependency, type] = track_dependency.value();
+      if (type == FreeTrackDependencyType::Pass) {
+        const auto cleared_at = get_time_when_dependency_cleared(
+            dependency, train_movements.at(dependency.leading_tr),
+            train_positions.at(dependency.leading_tr));
+        if (cleared_at.has_value()) {
+          // Time when dependency is cleared is already known
+          // Add time as current train's next timestep
+          upcoming_train_timesteps.push(
+              {current_train_id, t + cleared_at.value()});
+        } else {
+          train_dependencies.at(dependency.leading_tr).push_back(dependency);
+        }
+      } else if (type == FreeTrackDependencyType::Follow) {
+        auto to_timestep = iterative_movement_time_to_timestep(next_movements);
+        upcoming_train_timesteps.push({current_train_id, t + to_timestep});
+      }
+    }
 
-    upcoming_train_timesteps.push({current_train_id, next_timestep});
     train_movements.at(current_train_id) = next_movements;
 
     // Check whether new movements clear another train's dependency
@@ -805,6 +824,9 @@ double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
   }
   auto tr2_edge_index = std::distance(tr2_edges.begin(), it);
   for (auto i = tr2_edge_index; i < tr2_edges.size(); ++i) {
+    if (tr1_edges.size() <= tr1_edge_index) {
+      break;
+    }
     if (tr1_edges.at(tr1_edge_index) != tr2_edges.at(i)) {
       return shared_distance;
     }
@@ -820,6 +842,21 @@ double cda_rail::simulator::EventSimulator::get_shared_track_ahead_distance(
     }
   }
   return shared_distance;
+}
+
+double cda_rail::simulator::EventSimulator::iterative_movement_time_to_timestep(
+    const std::vector<TrainMovement>& movements) const {
+  if (movements.empty()) {
+    return ITERATIVE_MOVEMENT_TIME_WIDTH;
+  }
+  const auto movements_before_last =
+      std::span{movements}.subspan(0, movements.size() - 1);
+  const auto total_time_movements_before_last =
+      get_movements_total_time(movements_before_last);
+  if (total_time_movements_before_last > ITERATIVE_MOVEMENT_TIME_WIDTH) {
+    return total_time_movements_before_last;
+  }
+  return ITERATIVE_MOVEMENT_TIME_WIDTH;
 }
 
 void cda_rail::simulator::EventSimulator::append_max_permitted_speed_movements(

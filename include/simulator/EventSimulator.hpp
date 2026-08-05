@@ -95,6 +95,8 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
+  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH = 2.0;
+
   /**
    * Describes linear train movement with initial speed u, final speed v,
    * acceleration a, distance traveled s over time t.
@@ -310,6 +312,18 @@ private:
   [[nodiscard]] double get_shared_track_ahead_distance(TrainPosition& tr1_pos,
                                                        size_t         tr1,
                                                        size_t tr2) const;
+
+  /**
+   * Given the upcoming movements of a train which is following another train
+   * and may therefore need to move iteratively, calculate when the next
+   * timestep should be placed for the following train.
+   * @param movements
+   * @remark This assumes that the final movement in the sequence is braking to
+   * a standstill
+   * @return
+   */
+  double iterative_movement_time_to_timestep(
+      const std::vector<TrainMovement>& movements) const;
 
   [[nodiscard]] std::vector<TrainMovement> follow_train(size_t tr_follower,
                                                         size_t tr_leader);
