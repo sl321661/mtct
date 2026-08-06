@@ -95,7 +95,7 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
-  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH = 2.0;
+  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH = 6.0;
 
   /**
    * Describes linear train movement with initial speed u, final speed v,
@@ -190,6 +190,7 @@ private:
    * a position first, the first dependency found will be returned, else an
    * empty optional is returned.
    * @param train_positions All train positions
+   * @param trains_finished_simulating
    * @param trains_in_network
    * @param trains_on_edges
    * @param train_id ID of train to enter
@@ -201,6 +202,7 @@ private:
   [[nodiscard]] std::optional<TrainDependency>
   can_enter_train_or_get_dependency(
       const std::vector<TrainPosition>&              train_positions,
+      const std::unordered_set<size_t>&              trains_finished_simulating,
       const std::unordered_set<size_t>&              trains_in_network,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
       size_t                                         train_id) const;
@@ -208,7 +210,7 @@ private:
   [[nodiscard]] static std::optional<double> get_time_when_dependency_cleared(
       const TrainDependency&            dependency,
       const std::vector<TrainMovement>& leading_movements,
-      const TrainPosition&              leading_position);
+      const TrainPosition& leading_position, double leading_time_to_timestep);
 
   /**
    * Enter a train into the network, assumes it is not already present
@@ -222,20 +224,26 @@ private:
                    std::vector<double>&        train_velocities,
                    size_t                      train_id) const;
 
-  bool
-  is_edge_ttd_free_for_tr(const std::vector<TrainPosition>& train_positions,
-                          size_t edge_id, size_t train_id,
-                          TrainDependency& out_dependency) const;
+  bool is_edge_ttd_free_for_tr(
+      const std::vector<TrainPosition>& train_positions,
+      const std::unordered_set<size_t>& trains_finished_simulating,
+      size_t edge_id, size_t train_id, TrainDependency& out_dependency) const;
 
-  bool is_vertex_free_for_tr(const std::vector<TrainPosition>& train_positions,
-                             size_t vertex_id, size_t train_id,
-                             TrainDependency& out_dependency) const;
+  bool is_vertex_free_for_tr(
+      const std::vector<TrainPosition>& train_positions,
+      const std::unordered_set<size_t>& trains_finished_simulating,
+      size_t vertex_id, size_t train_id, TrainDependency& out_dependency) const;
 
   double edge_distance_free_for_tr(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
-      size_t edge_id, size_t train_id, TrainDependency& out_dependency) const;
+      size_t edge_id, size_t train_id, double distance_into_edge,
+      TrainDependency& out_dependency) const;
+
+  double
+  distance_into_current_edge(const std::vector<TrainPosition>& train_positions,
+                             size_t                            train_id) const;
 
   /**
    * Get the position in the current_train's path where the train no longer has
@@ -244,6 +252,7 @@ private:
    * @param train_positions Train positions
    * @param trains_in_network Trains in network, only these will be considered
    * for collisions on edges
+   * @param trains_finished_simulating
    * @param next_stop_indices
    * @param trains_on_edges
    * @param current_train ID of current train to find the free track end for
@@ -260,6 +269,7 @@ private:
   find_free_track_ahead(
       const std::vector<TrainPosition>&              train_positions,
       const std::unordered_set<size_t>&              trains_in_network,
+      const std::unordered_set<size_t>&              trains_finished_simulating,
       const std::vector<int>&                        next_stop_indices,
       const std::vector<std::unordered_set<size_t>>& trains_on_edges,
       size_t                                         current_train) const;
@@ -276,6 +286,10 @@ private:
   [[nodiscard]] static std::vector<TrainMovement>
   calculate_optimal_train_movements(std::vector<EdgeSegment>& free_track,
                                     double initial_speed, const Train& train);
+
+  static void
+  push_back_movement_if_not_zero(std::vector<TrainMovement>& movements,
+                                 const TrainMovement&        m);
 
   /**
    * For a given series of EdgeSegments, returns the point of, and the speed
@@ -322,8 +336,8 @@ private:
    * a standstill
    * @return
    */
-  double iterative_movement_time_to_timestep(
-      const std::vector<TrainMovement>& movements) const;
+  static double iterative_movement_time_to_timestep(
+      const std::vector<TrainMovement>& movements);
 
   [[nodiscard]] std::vector<TrainMovement> follow_train(size_t tr_follower,
                                                         size_t tr_leader);
