@@ -60,7 +60,7 @@ cda_rail::solver::astar_based::GenPOMovingBlockAStarSolver::solve(
 
   // const auto [init_feas, init_exit_times, init_braking, init_headways] =
   const auto init_simulator_result = simulator.simulate(
-      model_detail_input.dt, model_detail_input.late_entry_possible,
+      model_detail_input.late_entry_possible,
       model_detail_input.limit_speed_by_leaving_edges, false);
   const auto init_obj = simulator::objective_val(
       *simulator.get_instance(), init_simulator_result.exit_times,

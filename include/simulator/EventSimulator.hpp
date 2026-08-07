@@ -95,7 +95,8 @@ private:
   FRIEND_TEST(::EventSimulator, MoveTrain);
 #endif
 
-  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH = 6.0;
+  static constexpr int    STEPS_WITHOUT_MOVEMENT_FOR_DEADLOCK = 10;
+  static constexpr double ITERATIVE_MOVEMENT_TIME_WIDTH       = 6.0;
 
   /**
    * Describes linear train movement with initial speed u, final speed v,
@@ -384,7 +385,16 @@ private:
   static double
   get_edge_segments_total_distance(std::span<const EdgeSegment> segments);
 
-  static void move_train(TrainPosition& train_position, double& train_velocity,
+  /**
+   * Move trains forward, updating the position and velocity depending on
+   * movements
+   * @param train_position Train's position (can be changed)
+   * @param train_velocity Train's velocity (can be changed)
+   * @param train_movements Train's movements (can be changed)
+   * @param t Time to move train forward by
+   * @return Whether the train was moved at all
+   */
+  static bool move_train(TrainPosition& train_position, double& train_velocity,
                          std::vector<TrainMovement>& train_movements, double t);
 
   /**

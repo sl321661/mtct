@@ -133,6 +133,7 @@ cda_rail::simulator::EventSimulator::simulate(
   // TODO: Time at which exit vertex is reached is not checked
 
   // Simulate until no more trains are left to simulate
+  int timesteps_since_movement = 0;
   while (!upcoming_train_timesteps.empty()) {
     auto [current_train_id, current_timestep] = upcoming_train_timesteps.top();
     upcoming_train_timesteps.pop();
@@ -141,9 +142,18 @@ cda_rail::simulator::EventSimulator::simulate(
     PLOGV << "Simulating at timestep " << current_timestep;
 
     // Advance all trains based on how much time has passed since last timestep
+    auto movement_occurred = false;
     for (const auto& tr : trains_in_network) {
-      move_train(train_positions.at(tr), train_velocities.at(tr),
-                 train_movements.at(tr), current_timestep - t);
+      movement_occurred |=
+          move_train(train_positions.at(tr), train_velocities.at(tr),
+                     train_movements.at(tr), current_timestep - t);
+    }
+    if (!movement_occurred) {
+      timesteps_since_movement++;
+      if (timesteps_since_movement >= STEPS_WITHOUT_MOVEMENT_FOR_DEADLOCK)
+        return build_results(false);
+    } else {
+      timesteps_since_movement = 0;
     }
     t = current_timestep;
 
@@ -1014,7 +1024,7 @@ double cda_rail::simulator::EventSimulator::get_edge_segments_total_distance(
   return total;
 }
 
-void cda_rail::simulator::EventSimulator::move_train(
+bool cda_rail::simulator::EventSimulator::move_train(
     TrainPosition& train_position, double& train_velocity,
     std::vector<TrainMovement>& train_movements, const double t) {
   auto   movement                = 0.0;
@@ -1041,6 +1051,7 @@ void cda_rail::simulator::EventSimulator::move_train(
   train_velocity = final_speed;
   train_movements.erase(train_movements.begin(),
                         train_movements.begin() + fully_applied_movements);
+  return !approx_equal(movement, 0.0);
 }
 
 double cda_rail::simulator::EventSimulator::distance_traveled_consume_movement(
