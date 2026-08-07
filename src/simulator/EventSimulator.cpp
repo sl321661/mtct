@@ -124,11 +124,6 @@ cda_rail::simulator::EventSimulator::simulate(
 
   const auto trains_on_edges = tr_on_edges();
 
-  if (trains_on_edges[0].size() == 3 && trains_on_edges[1].size() == 3 &&
-      trains_on_edges[2].size() == 3) {
-    std::cout << "Hello" << std::endl;
-  }
-
   double t = upcoming_train_timesteps.empty()
                  ? 0
                  : upcoming_train_timesteps.top().timestep;
