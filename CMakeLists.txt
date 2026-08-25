@@ -47,7 +47,9 @@ endmacro()
 include(cmake/StandardProjectSettings.cmake)
 if(NOT TARGET project_options)
   # Use the options specified in CompilerOptions.cmake
-  add_library(project_options INTERFACE)
+  add_library(project_options INTERFACE
+          test/test_eventsimulator.cpp
+  )
 
   # Standard compiler options
   include(cmake/CompilerOptions.cmake)
@@ -61,7 +63,7 @@ endif()
 check_submodule_present("googletest")
 check_submodule_present("json")
 check_submodule_present("tinyxml2")
-check_submodule_present("gsl")
+check_submodule_present("cli11")
 check_submodule_present("plog")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -72,12 +74,6 @@ if(MSVC AND MT)
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT")
   set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd")
-endif()
-
-find_package(Gurobi REQUIRED)
-
-if(NOT GUROBI_FOUND)
-  message(WARNING "Did not find Gurobi")
 endif()
 
 # add main library code
